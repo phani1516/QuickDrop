@@ -10,8 +10,8 @@
     'use strict';
 
     // ---- Constants ----
-    const CHUNK_SIZE = 64 * 1024;                // 64 KB per chunk
-    const BUFFER_THRESHOLD = 16 * 1024 * 1024;   // 16 MB backpressure limit
+    const CHUNK_SIZE = 16 * 1024;                // 16 KB per chunk
+    const BUFFER_THRESHOLD = 4 * 1024 * 1024;   // 4 MB backpressure limit
     const HEARTBEAT_MS = 12000;
     const ICE_SERVERS = [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -338,8 +338,9 @@
                 const fi = buf.files.get(buf.currentIdx);
                 if (!fi) return;
                 fi.chunks.push(event.data);
-                fi.received += event.data.byteLength;
-                buf.receivedBytes += event.data.byteLength;
+                const chunkSize = event.data.byteLength || event.data.size || 0;
+                fi.received += chunkSize;
+                buf.receivedBytes += chunkSize;
 
                 // Update progress
                 const pct = buf.totalBytes > 0 ? Math.round((buf.receivedBytes / buf.totalBytes) * 100) : 0;
@@ -427,10 +428,14 @@
 
                     // Backpressure
                     while (dc.bufferedAmount > BUFFER_THRESHOLD) {
-                        await new Promise(resolve => {
-                            dc.bufferedAmountLowThreshold = BUFFER_THRESHOLD / 4;
-                            dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; resolve(); };
-                        });
+                        if ('bufferedAmountLowThreshold' in dc) {
+                            await new Promise(resolve => {
+                                dc.bufferedAmountLowThreshold = BUFFER_THRESHOLD / 4;
+                                dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; resolve(); };
+                            });
+                        } else {
+                            await new Promise(resolve => setTimeout(resolve, 50));
+                        }
                     }
 
                     dc.send(buffer);

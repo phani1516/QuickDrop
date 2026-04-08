@@ -973,6 +973,11 @@ main {
         gap: 1rem;
     }
 
+    .scanner-panel,
+    .share-panel {
+        width: 100%;
+    }
+
     .glass-header {
         padding: 0.75rem 1rem;
         flex-wrap: wrap;
