@@ -259,76 +259,94 @@
     // ================================================================
 
     function handleDCMessage(peerId, event) {
-        if (typeof event.data === 'string') {
-            const msg = JSON.parse(event.data);
-            switch (msg.type) {
-                case 'transfer-start': {
-                    receiveBuffers.set(peerId, {
-                        transferId: msg.transferId,
-                        totalFiles: msg.totalFiles,
-                        files: new Map(),
-                        currentIdx: -1,
-                        receivedBytes: 0,
-                        totalBytes: 0,
-                        completedFiles: 0,
-                    });
-                    break;
-                }
-                case 'file-start': {
-                    const buf = receiveBuffers.get(peerId);
-                    if (!buf) break;
-                    buf.currentIdx = msg.fileIndex;
-                    buf.files.set(msg.fileIndex, {
-                        fileName: msg.fileName,
-                        fileSize: msg.fileSize,
-                        fileType: msg.fileType,
-                        totalChunks: msg.totalChunks,
-                        chunks: [],
-                        received: 0,
-                    });
-                    buf.totalBytes += msg.fileSize;
-                    break;
-                }
-                case 'file-end': {
-                    const buf = receiveBuffers.get(peerId);
-                    if (!buf) break;
-                    const fi = buf.files.get(msg.fileIndex);
-                    if (fi) {
-                        const blob = new Blob(fi.chunks, { type: fi.fileType || 'application/octet-stream' });
-                        triggerDownload(blob, fi.fileName);
-                        addActivityItem(fi.fileName, fi.fileSize, 'received');
-                        buf.completedFiles++;
+        try {
+            if (typeof event.data === 'string') {
+                const msg = JSON.parse(event.data);
+                switch (msg.type) {
+                    case 'transfer-start': {
+                        console.log('[QD] transfer-start', msg.transferId, msg.totalFiles, 'files');
+                        receiveBuffers.set(peerId, {
+                            transferId: msg.transferId,
+                            totalFiles: msg.totalFiles,
+                            files: new Map(),
+                            currentIdx: -1,
+                            receivedBytes: 0,
+                            totalBytes: 0,
+                            completedFiles: 0,
+                        });
+                        break;
                     }
-                    break;
+                    case 'file-start': {
+                        const buf = receiveBuffers.get(peerId);
+                        if (!buf) break;
+                        console.log('[QD] file-start', msg.fileName, formatSize(msg.fileSize));
+                        buf.currentIdx = msg.fileIndex;
+                        buf.files.set(msg.fileIndex, {
+                            fileName: msg.fileName,
+                            fileSize: msg.fileSize,
+                            fileType: msg.fileType,
+                            totalChunks: msg.totalChunks,
+                            chunks: [],
+                            received: 0,
+                        });
+                        buf.totalBytes += msg.fileSize;
+                        break;
+                    }
+                    case 'file-end': {
+                        const buf = receiveBuffers.get(peerId);
+                        if (!buf) break;
+                        const fi = buf.files.get(msg.fileIndex);
+                        if (fi) {
+                            try {
+                                console.log('[QD] file-end', fi.fileName, fi.chunks.length, 'chunks,', formatSize(fi.received));
+                                const blob = new Blob(fi.chunks, { type: fi.fileType || 'application/octet-stream' });
+                                const url = URL.createObjectURL(blob);
+                                // Add to activity log with actual download link
+                                addReceivedFileItem(fi.fileName, fi.fileSize, url);
+                                // Attempt auto-download (may be blocked by browser)
+                                triggerDownload(url, fi.fileName);
+                                buf.completedFiles++;
+                            } catch (err) {
+                                console.error('[QD] Error assembling file:', err);
+                                toast('Error receiving: ' + fi.fileName, 'error');
+                            }
+                            // Free chunk memory
+                            fi.chunks = [];
+                        }
+                        break;
+                    }
+                    case 'transfer-end': {
+                        const buf = receiveBuffers.get(peerId);
+                        const n = buf ? buf.completedFiles : 0;
+                        receiveBuffers.delete(peerId);
+                        console.log('[QD] transfer-end,', n, 'files completed');
+                        toast(`Received ${n} file${n !== 1 ? 's' : ''}! Check Activity log to download.`, 'success');
+                        systemNotify('Transfer Complete', `Received ${n} file${n !== 1 ? 's' : ''}.`);
+                        break;
+                    }
+                    case 'text': {
+                        const device = devices.find(d => d.sessionId === peerId);
+                        const name = device ? device.codename : 'Unknown';
+                        showReceivedText(name, msg.text);
+                        break;
+                    }
                 }
-                case 'transfer-end': {
-                    const buf = receiveBuffers.get(peerId);
-                    const n = buf ? buf.completedFiles : 0;
-                    receiveBuffers.delete(peerId);
-                    toast(`Received ${n} file${n !== 1 ? 's' : ''} successfully!`, 'success');
-                    systemNotify('Transfer Complete', `Received ${n} file${n !== 1 ? 's' : ''}.`);
-                    break;
-                }
-                case 'text': {
-                    const device = devices.find(d => d.sessionId === peerId);
-                    const name = device ? device.codename : 'Unknown';
-                    showReceivedText(name, msg.text);
-                    break;
-                }
-            }
-        } else {
-            // Binary → file chunk
-            const buf = receiveBuffers.get(peerId);
-            if (!buf) return;
-            const fi = buf.files.get(buf.currentIdx);
-            if (!fi) return;
-            fi.chunks.push(event.data);
-            fi.received += event.data.byteLength;
-            buf.receivedBytes += event.data.byteLength;
+            } else {
+                // Binary → file chunk
+                const buf = receiveBuffers.get(peerId);
+                if (!buf) return;
+                const fi = buf.files.get(buf.currentIdx);
+                if (!fi) return;
+                fi.chunks.push(event.data);
+                fi.received += event.data.byteLength;
+                buf.receivedBytes += event.data.byteLength;
 
-            // Update progress
-            const pct = buf.totalBytes > 0 ? Math.round((buf.receivedBytes / buf.totalBytes) * 100) : 0;
-            updateReceiveProgress(pct);
+                // Update progress
+                const pct = buf.totalBytes > 0 ? Math.round((buf.receivedBytes / buf.totalBytes) * 100) : 0;
+                updateReceiveProgress(pct);
+            }
+        } catch (err) {
+            console.error('[QD] handleDCMessage error:', err);
         }
     }
 
@@ -607,9 +625,9 @@
         let badgeClass = '';
         let badgeText = '';
         if (type === 'sent') { badgeClass = 'activity-badge sent'; badgeText = 'Sent'; }
-        else if (type === 'received') { badgeClass = 'download-btn'; badgeText = 'Received'; }
         else if (type === 'text-sent') { badgeClass = 'activity-badge text-badge'; badgeText = 'Sent'; }
         else if (type === 'text-received') { badgeClass = 'activity-badge text-badge'; badgeText = 'Received'; }
+        else { badgeClass = 'activity-badge'; badgeText = type; }
 
         item.innerHTML = `
             <div class="file-info">
@@ -618,6 +636,33 @@
             </div>
             <span class="${badgeClass}">${badgeText}</span>
         `;
+        list.prepend(item);
+    }
+
+    // ---- Received File with Download Link ----
+    function addReceivedFileItem(fileName, fileSize, blobUrl) {
+        const list = el('files-list');
+        const empty = list.querySelector('.empty-state');
+        if (empty) empty.remove();
+
+        const item = document.createElement('div');
+        item.className = 'file-item';
+        item.innerHTML = `
+            <div class="file-info">
+                <span class="file-name" title="${esc(fileName)}">${esc(fileName)}</span>
+                <span class="file-meta">${formatSize(fileSize)} · ${new Date().toLocaleTimeString()}</span>
+            </div>
+        `;
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = fileName;
+        link.className = 'download-btn';
+        link.textContent = '⬇ Download';
+        link.addEventListener('click', function (e) {
+            // User-initiated click — this will always work
+            console.log('[QD] User clicked download for:', fileName);
+        });
+        item.appendChild(link);
         list.prepend(item);
     }
 
@@ -650,15 +695,21 @@
     }
 
     // ---- Download Trigger ----
-    function triggerDownload(blob, fileName) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    // Attempts auto-download. May be blocked by browser if not from user gesture.
+    // The activity log always has a clickable Download link as fallback.
+    function triggerDownload(blobUrl, fileName) {
+        try {
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = fileName;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            console.log('[QD] Auto-download triggered for:', fileName);
+        } catch (err) {
+            console.warn('[QD] Auto-download failed (browser blocked), use Activity log:', err);
+        }
     }
 
     // ---- Drag & Drop ----

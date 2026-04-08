@@ -44,10 +44,10 @@ body {
     background-position: center;
     background-attachment: fixed;
     color: var(--text-primary);
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
-    overflow-x: hidden;
+    overflow: hidden;
 }
 
 /* ========= HEADER ========= */
@@ -181,20 +181,27 @@ main {
     max-width: 1400px;
     margin: 0 auto;
     width: 100%;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .panel {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .scanner-panel {
-    flex: 7;
+    width: calc(70% - 1rem);
+    flex-shrink: 0;
 }
 
 .share-panel {
-    flex: 3;
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
 }
 
 /* ========= GLASS CARD ========= */
@@ -241,7 +248,10 @@ main {
 .scanner-card {
     position: relative;
     overflow: hidden;
-    padding-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
 }
 
 .radar-hint {
@@ -258,8 +268,8 @@ main {
     justify-content: center;
     align-items: center;
     width: 100%;
-    aspect-ratio: 1 / 0.85;
-    min-height: 340px;
+    flex: 1;
+    min-height: 0;
     overflow: visible;
 }
 

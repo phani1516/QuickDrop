@@ -25,9 +25,13 @@ app.use(compression({
 }));
 
 app.use(express.static(path.join(__dirname, 'public'), {
-    maxAge: '7d',
+    maxAge: 0,
     setHeaders: (res, filePath) => {
         if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+        // Don't cache CSS/JS aggressively to avoid stale styles
+        if (filePath.endsWith('.css') || filePath.endsWith('.js')) {
+            res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        }
     }
 }));
 
