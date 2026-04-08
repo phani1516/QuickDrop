@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuickDrop — Instant P2P File Sharing</title>
+    <meta name="description" content="Share files instantly across devices on your local network. No uploads, no accounts — pure peer-to-peer.">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#caf0f8">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- ========= HEADER ========= -->
+    <header class="glass-header">
+        <div class="logo">Quick<span>Drop</span></div>
+        <div class="header-actions">
+            <button class="room-btn glass-pill" id="room-btn" title="Join a room for cross-network sharing">
+                <svg viewBox="0 0 24 24" width="16" height="16"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>
+                <span id="room-label">Room</span>
+            </button>
+            <div class="my-device-badge">
+                <div class="badge-dot"></div>
+                <div>
+                    <div class="badge-label">This Device</div>
+                    <div class="badge-name" id="my-device-name">Connecting…</div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- ========= MAIN ========= -->
+    <main>
+        <!-- LEFT — Network Radar -->
+        <section class="panel scanner-panel">
+            <div class="scanner-card glass-card">
+                <h2>
+                    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+                    Network
+                    <span class="online-count"><span class="dot"></span><span id="online-count-text">0 online</span></span>
+                </h2>
+                <p class="radar-hint" id="radar-hint">Click a device to share</p>
+                <div class="radar-container">
+                    <div class="radar">
+                        <div class="ring"></div>
+                        <div class="ring delay-1"></div>
+                        <div class="ring delay-2"></div>
+                        <div class="ring delay-3"></div>
+                        <div class="center-dot"></div>
+                        <div class="center-label" id="center-label">You</div>
+                        <div id="devices-container"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- RIGHT — Share + Activity -->
+        <section class="panel share-panel">
+            <!-- Share Card -->
+            <div class="share-card glass-card">
+                <h2>
+                    <svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+                    Share
+                </h2>
+
+                <!-- No selection state -->
+                <div id="no-selection" class="no-selection">
+                    <svg viewBox="0 0 24 24" width="48" height="48"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                    <p>Select a device from the network radar to share files or text</p>
+                </div>
+
+                <!-- Send panel (visible after selecting a device) -->
+                <div id="send-panel" class="send-panel" style="display:none;">
+                    <div class="selected-device glass-pill" id="selected-device-chip">
+                        <span id="selected-device-icon"></span>
+                        <span id="selected-device-name">Device</span>
+                        <button id="deselect-btn" class="deselect-btn" title="Deselect">✕</button>
+                    </div>
+
+                    <div class="drop-area" id="drop-area">
+                        <svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+                        <p>Drop files or <span class="highlight">browse</span></p>
+                        <input type="file" id="file-input" hidden multiple>
+                    </div>
+
+                    <div class="text-send-area">
+                        <textarea id="text-input" class="glass-input" placeholder="Or type a message / URL…" rows="2"></textarea>
+                        <button id="send-text-btn" class="send-btn">Send</button>
+                    </div>
+
+                    <div class="upload-status" id="upload-status" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <p id="progress-text">Sending… 0%</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity log -->
+            <div class="files-card glass-card">
+                <h2>
+                    <svg viewBox="0 0 24 24"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/></svg>
+                    Activity
+                </h2>
+                <div class="files-list" id="files-list">
+                    <p class="empty-state">No activity yet.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ========= TRANSFER PROMPT MODAL ========= -->
+    <div class="modal-overlay" id="transfer-modal" style="display:none;">
+        <div class="modal-card glass-card">
+            <h3>Incoming File Transfer</h3>
+            <div id="transfer-details"></div>
+            <div class="modal-actions">
+                <button id="accept-transfer-btn" class="modal-btn accept-btn">Accept</button>
+                <button id="reject-transfer-btn" class="modal-btn reject-btn">Decline</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========= TEXT RECEIVE MODAL ========= -->
+    <div class="modal-overlay" id="text-modal" style="display:none;">
+        <div class="modal-card glass-card">
+            <h3>Incoming Message</h3>
+            <p class="text-sender" id="text-sender-name"></p>
+            <div class="text-content glass-input" id="text-content"></div>
+            <div class="modal-actions">
+                <button id="copy-text-btn" class="modal-btn accept-btn">Copy</button>
+                <button id="open-link-btn" class="modal-btn accept-btn" style="display:none;">Open Link</button>
+                <button id="dismiss-text-btn" class="modal-btn reject-btn">Dismiss</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========= ROOM DIALOG ========= -->
+    <div class="modal-overlay" id="room-modal" style="display:none;">
+        <div class="modal-card glass-card">
+            <h3>Join a Room</h3>
+            <p class="modal-desc">Enter a room code to connect with devices on other networks.</p>
+            <input type="text" id="room-input" class="glass-input" placeholder="e.g. myroom" maxlength="8" autocomplete="off">
+            <div class="modal-actions">
+                <button id="join-room-btn" class="modal-btn accept-btn">Join</button>
+                <button id="leave-room-btn" class="modal-btn reject-btn" style="display:none;">Leave Room</button>
+                <button id="cancel-room-btn" class="modal-btn reject-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========= TOAST CONTAINER ========= -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
