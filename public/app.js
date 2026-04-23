@@ -173,7 +173,15 @@
         const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         let dcReadyResolve;
         const dcReady = new Promise(r => { dcReadyResolve = r; });
-        const peer = { pc, dc: null, dcReady, dcReadyResolve };
+        const peer = {
+            pc, dc: null, dcReady, dcReadyResolve,
+            isInitiator,
+            remoteDescSet: false,      // becomes true once setRemoteDescription resolves
+            pendingCandidates: [],     // ICE candidates that arrived before remote desc was set
+        };
+
+        // Register the peer BEFORE any async work so that incoming signals can find it
+        peers.set(peerId, peer);
 
         // ICE candidates → relay via signaling
         pc.onicecandidate = (e) => {
@@ -183,28 +191,46 @@
         };
 
         pc.onconnectionstatechange = () => {
-            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+            const state = pc.connectionState;
+            console.log('[QD] PC state:', peerId, '→', state);
+            // 'disconnected' is often transient — give ICE a chance to recover.
+            // Only tear the peer down on terminal states.
+            if (state === 'failed' || state === 'closed') {
                 destroyPeer(peerId);
             }
         };
 
-        // If initiator, create the data channel
-        if (isInitiator) {
-            const dc = pc.createDataChannel('quickdrop', { ordered: true });
-            setupDataChannel(peer, dc, peerId);
-            // Create and send offer
-            pc.createOffer().then(offer => {
-                pc.setLocalDescription(offer);
-                wsSend({ type: 'signal', targetId: peerId, signalType: 'offer', data: offer });
-            });
-        }
+        pc.oniceconnectionstatechange = () => {
+            console.log('[QD] ICE state:', peerId, '→', pc.iceConnectionState);
+        };
 
-        // If answerer, receive data channel
+        // Register ondatachannel BEFORE any offer/answer is exchanged so we
+        // can't miss the event on the answerer side.
         pc.ondatachannel = (event) => {
             setupDataChannel(peer, event.channel, peerId);
         };
 
-        peers.set(peerId, peer);
+        // If initiator, create the data channel and then the offer.
+        // Errors in the async chain must be surfaced — previously they were
+        // swallowed, which made failed handshakes impossible to diagnose.
+        if (isInitiator) {
+            const dc = pc.createDataChannel('quickdrop', { ordered: true });
+            setupDataChannel(peer, dc, peerId);
+
+            (async () => {
+                try {
+                    const offer = await pc.createOffer();
+                    // IMPORTANT: wait for setLocalDescription before sending the
+                    // offer. Sending early can race with ICE gathering and
+                    // cause the remote side to reject the signal.
+                    await pc.setLocalDescription(offer);
+                    wsSend({ type: 'signal', targetId: peerId, signalType: 'offer', data: pc.localDescription });
+                } catch (err) {
+                    console.error('[QD] createOffer failed:', err);
+                }
+            })();
+        }
+
         return { peer, ready: dcReady };
     }
 
@@ -228,28 +254,77 @@
     }
 
     // ---- Handle incoming WebRTC signals ----
-    function handleSignal(senderId, signalType, data) {
+    //
+    // The original version had two serious bugs:
+    //   (a) ICE candidates that arrived before the remote description was
+    //       set were silently dropped by addIceCandidate, leaving the
+    //       connection unable to reach "connected" state.
+    //   (b) setLocalDescription was called without awaiting, so the answer
+    //       could be sent before the local description was actually applied.
+    // Both are fixed below.
+    async function handleSignal(senderId, signalType, data) {
         if (signalType === 'offer') {
+            // Create peer as answerer. createPeer() registers it in `peers`
+            // synchronously so ICE candidates arriving next can be queued.
             const { peer } = createPeer(senderId, false);
-            peer.pc.setRemoteDescription(new RTCSessionDescription(data)).then(() => {
-                return peer.pc.createAnswer();
-            }).then(answer => {
-                peer.pc.setLocalDescription(answer);
-                wsSend({ type: 'signal', targetId: senderId, signalType: 'answer', data: answer });
-            }).catch(err => console.error('Signal offer error:', err));
+            try {
+                await peer.pc.setRemoteDescription(new RTCSessionDescription(data));
+                peer.remoteDescSet = true;
+                await drainPendingCandidates(peer);
+
+                const answer = await peer.pc.createAnswer();
+                await peer.pc.setLocalDescription(answer);
+                wsSend({
+                    type: 'signal',
+                    targetId: senderId,
+                    signalType: 'answer',
+                    data: peer.pc.localDescription,
+                });
+            } catch (err) {
+                console.error('[QD] offer handling failed:', err);
+            }
 
         } else if (signalType === 'answer') {
             const peer = peers.get(senderId);
-            if (peer) {
-                peer.pc.setRemoteDescription(new RTCSessionDescription(data))
-                    .catch(err => console.error('Signal answer error:', err));
+            if (!peer) return;
+            try {
+                await peer.pc.setRemoteDescription(new RTCSessionDescription(data));
+                peer.remoteDescSet = true;
+                await drainPendingCandidates(peer);
+            } catch (err) {
+                console.error('[QD] answer handling failed:', err);
             }
 
         } else if (signalType === 'ice-candidate') {
             const peer = peers.get(senderId);
-            if (peer) {
-                peer.pc.addIceCandidate(new RTCIceCandidate(data))
-                    .catch(() => { /* non-fatal */ });
+            if (!peer) {
+                // No peer yet — this candidate arrived before we processed
+                // the offer. Drop silently; the remote will re-trickle or
+                // ICE will find another candidate pair.
+                return;
+            }
+            if (!peer.remoteDescSet) {
+                // Queue until setRemoteDescription resolves. This is THE
+                // fix for the most common "handshake stalls forever" bug.
+                peer.pendingCandidates.push(data);
+                return;
+            }
+            try {
+                await peer.pc.addIceCandidate(new RTCIceCandidate(data));
+            } catch (err) {
+                console.warn('[QD] addIceCandidate failed (non-fatal):', err);
+            }
+        }
+    }
+
+    async function drainPendingCandidates(peer) {
+        const queue = peer.pendingCandidates;
+        peer.pendingCandidates = [];
+        for (const c of queue) {
+            try {
+                await peer.pc.addIceCandidate(new RTCIceCandidate(c));
+            } catch (err) {
+                console.warn('[QD] queued addIceCandidate failed:', err);
             }
         }
     }
@@ -426,15 +501,39 @@
                     const chunk = file.slice(start, end);
                     const buffer = await chunk.arrayBuffer();
 
-                    // Backpressure
-                    while (dc.bufferedAmount > BUFFER_THRESHOLD) {
-                        if ('bufferedAmountLowThreshold' in dc) {
-                            await new Promise(resolve => {
-                                dc.bufferedAmountLowThreshold = BUFFER_THRESHOLD / 4;
-                                dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; resolve(); };
-                            });
-                        } else {
-                            await new Promise(resolve => setTimeout(resolve, 50));
+                    // Backpressure.
+                    //
+                    // The naive pattern — while(buffered > HIGH) { await
+                    // bufferedamountlow } — has a subtle race: if
+                    // `bufferedAmount` drops under the threshold between the
+                    // while check and the listener registration, the event
+                    // never fires and the send stalls forever. We avoid that
+                    // by (a) setting the low threshold once, (b) polling
+                    // with a short timeout as a safety net inside the wait.
+                    if (dc.bufferedAmount > BUFFER_THRESHOLD) {
+                        dc.bufferedAmountLowThreshold = BUFFER_THRESHOLD / 2;
+                        await new Promise(resolve => {
+                            let done = false;
+                            const finish = () => {
+                                if (done) return;
+                                done = true;
+                                dc.removeEventListener('bufferedamountlow', finish);
+                                clearInterval(poll);
+                                resolve();
+                            };
+                            dc.addEventListener('bufferedamountlow', finish);
+                            // Safety net: poll in case the event was missed
+                            // (happens on some browsers when the level drops
+                            // before the listener attaches).
+                            const poll = setInterval(() => {
+                                if (dc.readyState !== 'open' ||
+                                    dc.bufferedAmount <= dc.bufferedAmountLowThreshold) {
+                                    finish();
+                                }
+                            }, 50);
+                        });
+                        if (dc.readyState !== 'open') {
+                            throw new Error('Data channel closed during send');
                         }
                     }
 

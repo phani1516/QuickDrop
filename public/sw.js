@@ -1,6 +1,6 @@
 // QuickDrop Service Worker — caches app shell for offline access
 
-const CACHE_NAME = 'quickdrop-v3';
+const CACHE_NAME = 'quickdrop-v4';
 const SHELL_ASSETS = [
     '/',
     '/index.html',
