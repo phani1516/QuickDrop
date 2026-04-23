@@ -112,17 +112,49 @@ Devices on different networks won't auto-discover each other. To connect them:
 2. Enter the same code (e.g. `myroom`) on both
 3. They now see each other and can transfer exactly as if they were on the same LAN
 
-Note: WebRTC may need a TURN server to punch through strict NATs. QuickDrop ships with STUN only; you can add TURN servers to `ICE_SERVERS` in `public/app.js` if you need it for hostile network environments.
+> ⚠️ **Rooms alone aren't enough for cross-network transfers.** Rooms solve *discovery* (so the two devices can see each other on the radar), but not *connectivity* (so the data channel can actually open). If one device is on home Wi-Fi and the other is on mobile data, you almost certainly need a TURN server — see the next section.
+
+## Deploying to the public internet (Render, Railway, Fly, etc.)
+
+QuickDrop runs happily on free tiers like Render. The server is ~10 MB in memory and only handles signaling, so it barely uses any resources.
+
+**One critical thing about the public internet:** when two devices are on *different* networks (say, home Wi-Fi + a mobile carrier), STUN servers alone usually can't establish a direct peer-to-peer connection. Mobile carriers in particular use *symmetric NAT*, which defeats naive hole-punching. The symptoms look like this: the accept prompt shows up fine, the receiver clicks accept, and then… nothing happens. The transfer silently times out.
+
+The fix is a **TURN server**, which relays the encrypted data when a direct connection can't be made. QuickDrop supports this via environment variables — no code changes needed.
+
+### Setting up TURN on Render
+
+1. Get free TURN credentials from one of:
+   - **Cloudflare** (recommended): generate at <https://speed.cloudflare.com/turn-creds> — fast, reliable, free.
+   - **ExpressTURN**: <https://www.expressturn.com/> — free tier with 1000 GB/month.
+   - **Metered Open Relay**: <https://www.metered.ca/tools/openrelay/> — free but rate-limited.
+   - **Self-hosted coturn**: a $4/mo VPS gives you unlimited TURN.
+2. In your Render dashboard → your service → **Environment** → add:
+
+   | Key | Value |
+   |---|---|
+   | `TURN_URL` | `turn:your-turn-host:3478` |
+   | `TURN_URL_TLS` | `turns:your-turn-host:5349` *(optional)* |
+   | `TURN_USERNAME` | *(from your provider)* |
+   | `TURN_CREDENTIAL` | *(from your provider)* |
+
+3. Redeploy. The server will now serve these credentials to each connected client via `GET /ice-config`, and the client will use them automatically.
+
+You can verify it's working by opening the browser DevTools console — you'll see `[QD] loaded ICE config: stun:…, turn:…` on startup, and `[QD] ICE state: … → connected` during a transfer. If ICE never reaches `connected`, your TURN credentials are wrong.
+
+### About Render's free tier
+
+Render's free web services spin down after 15 minutes of inactivity and take ~30 seconds to wake up. That's fine for signaling, but the *first* connection after a cold start will feel slow. For a responsive demo, upgrade to a paid tier ($7/mo) or use a keep-alive ping.
 
 ## File structure
 
 ```
 QuickDrop/
-├── server.js              # Signaling server (WebSocket + static hosting)
+├── server.js              # Signaling server (WebSocket + /ice-config)
 ├── package.json
 └── public/
     ├── index.html         # UI shell
-    ├── app.js             # All client logic: signaling, WebRTC, chunking, UI
+    ├── app.js             # Client logic: signaling, WebRTC, chunking, UI
     ├── style.css          # Glass UI + radar animations
     ├── manifest.json      # PWA manifest
     └── sw.js              # Service worker (offline shell)
@@ -145,12 +177,15 @@ All tunables are near the top of `server.js` and `public/app.js`:
 | Setting | Location | Default | Purpose |
 |---|---|---|---|
 | `PORT` | env var | `3000` | Port the server listens on |
+| `TURN_URL` | env var | *(unset)* | TURN server URL (e.g. `turn:host:3478`) |
+| `TURN_URL_TLS` | env var | *(unset)* | Optional TURNS URL (e.g. `turns:host:5349`) |
+| `TURN_USERNAME` | env var | *(unset)* | TURN username |
+| `TURN_CREDENTIAL` | env var | *(unset)* | TURN password / credential |
 | `MAX_CONNECTIONS_PER_IP` | `server.js` | `10` | Anti-abuse cap |
 | `MAX_ROOM_SIZE` | `server.js` | `10` | Devices per room |
 | `STALE_TIMEOUT` | `server.js` | `30000` ms | Drop dead sessions after this |
 | `CHUNK_SIZE` | `app.js` | `16 KB` | File chunk size over the data channel |
 | `BUFFER_THRESHOLD` | `app.js` | `4 MB` | Backpressure high-water mark |
-| `ICE_SERVERS` | `app.js` | Google STUN | Add TURN here if needed |
 
 ## Roadmap
 

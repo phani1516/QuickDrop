@@ -13,10 +13,31 @@
     const CHUNK_SIZE = 16 * 1024;                // 16 KB per chunk
     const BUFFER_THRESHOLD = 4 * 1024 * 1024;   // 4 MB backpressure limit
     const HEARTBEAT_MS = 12000;
-    const ICE_SERVERS = [
+
+    // ICE servers — populated at startup from /ice-config so that TURN
+    // credentials can be configured server-side (e.g. via Render env vars)
+    // without editing client code. Falls back to STUN-only if that fails,
+    // which will still work on same-LAN setups but NOT across the public
+    // internet through mobile carrier / symmetric NAT.
+    let ICE_SERVERS = [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
     ];
+
+    async function loadIceServers() {
+        try {
+            const res = await fetch('/ice-config', { cache: 'no-store' });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (Array.isArray(data.iceServers) && data.iceServers.length) {
+                ICE_SERVERS = data.iceServers;
+                console.log('[QD] loaded ICE config:',
+                    ICE_SERVERS.map(s => s.urls).join(', '));
+            }
+        } catch (err) {
+            console.warn('[QD] /ice-config fetch failed, using defaults:', err);
+        }
+    }
 
     // ---- State ----
     let ws = null;
@@ -469,9 +490,17 @@
         try {
             const { peer, ready } = getOrCreatePeer(targetId, true);
 
-            // Wait for data channel with timeout
+            // Wait for data channel with timeout. Bumped to 30s to give TURN
+            // relay candidates time to establish on slow mobile networks —
+            // ICE gathering + relay allocation on a cold TURN server can
+            // legitimately take 10-20s.
             const timeout = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Connection timed out')), 15000)
+                setTimeout(() => reject(new Error(
+                    'Connection timed out. This usually means the two devices ' +
+                    'could not reach each other directly. If they are on ' +
+                    'different networks (e.g. home Wi-Fi and mobile data), ' +
+                    'you need a TURN server — see the README for setup.'
+                )), 30000)
             );
             await Promise.race([ready, timeout]);
 
@@ -942,9 +971,13 @@
     // ================================================================
     //   INIT
     // ================================================================
-    function init() {
+    async function init() {
         setupDragDrop();
         wireEvents();
+        // Load ICE servers BEFORE opening the WebSocket so any immediate
+        // peer creation (rare, but possible if another device is already
+        // waiting) uses the correct TURN config.
+        await loadIceServers();
         connectSignaling();
         registerSW();
     }

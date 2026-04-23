@@ -1,10 +1,10 @@
 // QuickDrop Service Worker — caches app shell for offline access
 
-const CACHE_NAME = 'quickdrop-v4';
+const CACHE_NAME = 'quickdrop-v5';
 const SHELL_ASSETS = [
     '/',
     '/index.html',
-    '/style.css?v=2',
+    '/style.css?v=3',
     '/app.js',
     '/manifest.json',
 ];
@@ -32,8 +32,12 @@ self.addEventListener('activate', (event) => {
 
 // Fetch: network-first, fall back to cache
 self.addEventListener('fetch', (event) => {
+    const url = event.request.url;
     // Skip WebSocket and non-GET
-    if (event.request.url.includes('/ws') || event.request.method !== 'GET') return;
+    if (url.includes('/ws') || event.request.method !== 'GET') return;
+    // Skip the ICE config endpoint — we want fresh TURN creds every time,
+    // not a cached copy that might be hours old.
+    if (url.includes('/ice-config')) return;
 
     event.respondWith(
         fetch(event.request)

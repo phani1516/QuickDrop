@@ -35,6 +35,55 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
 }));
 
+// ---- ICE config endpoint ----
+//
+// Serves the WebRTC iceServers array to the client at startup. STUN alone
+// is enough for LAN / lenient-NAT setups, but devices on different mobile
+// carriers or behind symmetric NATs (common on corporate / 4G / 5G)
+// require a TURN relay — otherwise the DataChannel silently never opens
+// and file transfers time out after the "accept" step.
+//
+// Configure TURN via environment variables (e.g. in Render's dashboard):
+//
+//   TURN_URL        turn:global.turn.example.com:3478
+//   TURN_URL_TLS    turns:global.turn.example.com:5349  (optional, TLS)
+//   TURN_USERNAME   your-username
+//   TURN_CREDENTIAL your-password
+//
+// Free TURN options as of 2026 include:
+//   - Cloudflare:  https://speed.cloudflare.com/turn-creds  (generates short-lived creds)
+//   - ExpressTURN: https://www.expressturn.com/             (free tier, 1000 GB/mo)
+//   - Metered:     https://www.metered.ca/tools/openrelay/  (limited free tier)
+//   - Self-hosted: coturn on a $4/mo VPS is cheap and reliable.
+function buildIceServers() {
+    const servers = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+    ];
+
+    const turnUrl = process.env.TURN_URL;
+    const turnUrlTls = process.env.TURN_URL_TLS;
+    const turnUser = process.env.TURN_USERNAME;
+    const turnCred = process.env.TURN_CREDENTIAL;
+
+    if (turnUrl && turnUser && turnCred) {
+        const urls = [turnUrl];
+        if (turnUrlTls) urls.push(turnUrlTls);
+        servers.push({
+            urls,
+            username: turnUser,
+            credential: turnCred,
+        });
+    }
+
+    return servers;
+}
+
+app.get('/ice-config', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ iceServers: buildIceServers() });
+});
+
 // ---- WebSocket Signaling Server ----
 const wss = new WebSocketServer({ server, path: '/ws' });
 
